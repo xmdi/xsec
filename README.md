@@ -10,7 +10,7 @@ first time, init venv:
 `python -m venv venv`
 
 first time, install dependencies:
-`pip install -e .`
+`pip install -e .[dev]`
 
 every time, activate venv:
 `source venv/bin/activate`
