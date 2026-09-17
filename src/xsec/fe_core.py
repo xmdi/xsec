@@ -66,5 +66,5 @@ def evaluate_gauss_point(element_type, nodes, gp):
         J_inv[0, :] = [J[1, 1], -J[0, 1]] / det_J
         J_inv[1, :] = [-J[1, 0], J[0, 0]] / det_J
    else:
-        raise(f"Unsupported element_type ({element_type}) in evaluate_jacobian().")
+        raise(f"Unsupported element_type ({element_type}) in evaluate_gauss_point().")
     return N, dN, J, det_J, J_inv
