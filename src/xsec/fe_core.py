@@ -93,7 +93,27 @@ def constitutive_matrix_isotropic(E, v):
     D[4, 4] = G   # gamma23
     return D
 
-def elemental_matrices(element_type,nodes):
+def constitutive_matrix_orthotropic(E1, E2, E3, v12, v13, v23, G12, G13, G23):
+    """Generates orthotropic elastic constitutive matrix. All inputs should be np.float64"""
+    v21 = v12 * E2 / E1
+    v31 = v13 * E3 / E1
+    v32 = v23 * E3 / E2
+    C_normal = np.zeros((3, 3))
+    C_normal[0, :] = [1 / E1, -v21 / E2, -v31 / E3]
+    C_normal[1, :] = [-v12 / E1, 1 / E2, -v32 / E3]
+    C_normal[2, :] = [-v13 / E1, -v23 / E2, 1 / E3]
+    D_normal = np.linalg.inv(C_normal)
+    D = np.zeros((6, 6))
+    normal_idx = [0, 1, 5]   # eps11, eps22, eps33
+    for a, i in enumerate(normal_idx):
+        for b, j in enumerate(normal_idx):
+            D[i, j] = D_normal[a, b]
+    D[2, 2] = G12
+    D[3, 3] = G13
+    D[4, 4] = G23
+    return D
+
+def elemental_matrices(element_type,D,nodes):
     """Generates elemental matrices Mi, Ci, Ei, Li & Ri."""
     S = np.array([
         [0.0, 0.0, 0.0],
@@ -102,9 +122,6 @@ def elemental_matrices(element_type,nodes):
         [1.0, 0.0, 0.0],
         [0.0, 1.0, 0.0],
         [0.0, 0.0, 1.0]])
-    E=10.0e6
-    v=0.3
-    D = constitutive_matrix_isotropic(E, v) # TODO: need to generalize this, probably compute outside of this function and reused
     DS = D @ S
     SDS = S.T @ DS
     if element_type == 3: # bilinear quad
