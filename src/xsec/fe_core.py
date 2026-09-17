@@ -68,3 +68,13 @@ def evaluate_gauss_point(element_type, nodes, gp):
    else:
         raise(f"Unsupported element_type ({element_type}) in evaluate_gauss_point().")
     return N, dN, J, det_J, J_inv
+
+def constitutive_matrix_isotropic(E, v):
+    """Generates isotropic elastic constitutive matrix. All inputs should be np.float64"""
+    G = E / (2 * (1 + v))
+    Q1 = (E * (1 - v)) / ((1 + v) * (1 - 2 * v))
+    Q2 = (E * v) / ((1 + v) * (1 - 2 * v))
+    D = np.zeros((6, 6), dtype = np.float64)
+    D[0:2,0:2] = [[Q1, Q2, Q2], [Q2, Q1, Q2], [Q2, Q2, Q1]]
+    D[3:5,3:5] = [[G, 0, 0], [0, G, 0], [0, 0, G]]
+    return D
