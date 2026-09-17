@@ -154,3 +154,13 @@ def elemental_matrices(element_type,D,nodes):
         raise ValueError(f"Unsupported element_type ({element_type}) in elemental_matrices().")
 
     return Mi, Ci, Ei, Li, Ri
+
+def evaluate_SC_TC(K):
+    """Evaluates shear center and tension center."""
+    Kt = K[0:2, 0:2]
+    Kc = K[0:2, 3:5]
+    Kt_inv = np.linalg.inv(Kt)
+    Y = -Kt_inv @ Kc
+    xs = np.array([-Y[1, 2], Y[0, 2]])
+    xt = np.array([Y[2, 1], -Y[2, 0]])
+    return xs, xt
