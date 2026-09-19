@@ -1,4 +1,5 @@
 import numpy as np
+import gmsh
 
 def evaluate_gauss_point(element_type, nodes, gp):
     """Evaluates and returns all matrices used in the Gaussian integration. All inputs should be np.float64"""
@@ -164,3 +165,46 @@ def evaluate_SC_TC(K):
     xs = np.array([-Y[1, 2], Y[0, 2]])
     xt = np.array([Y[2, 1], -Y[2, 0]])
     return xs, xt
+
+def evaluate_stiffness()
+    """Main wrapper function."""
+    node_tags, node_coords_flat, _ = gmsh.model.mesh.getNodes()
+    node_coords = node_coords_flat.reshape(-1, 3)[:, :2]
+    node_id_to_index = {tag: i for i, tag in enumerate(node_tags)}
+    n_dof = 3 * len(node_tags)
+
+    M_global = np.zeros((n_dof, n_dof))
+    _global = np.zeros((n_dof, n_dof))
+    E_global = np.zeros((n_dof, n_dof))
+    L_global = np.zeros((n_dof, 6))
+    R_global = np.zeros((n_dof, 6))
+
+    for dim, group_tag in gmsh.model.getPhysicalGroups(2):
+        name = gmsh.model.getPhysicalName(dim, group_tag)
+        D = material_D_matrices[name]   # look up this component's D once per group
+
+        for surf_tag in gmsh.model.getEntitiesForPhysicalGroup(dim, group_tag):
+            elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, surf_tag)
+            for etype, etags, enodes in zip(elem_types, elem_tags, elem_node_tags):
+                nodes_per_elem = len(enodes) // len(etags)
+                enodes = enodes.reshape(-1, nodes_per_elem)
+
+                for et, local_node_tags in zip(etags, enodes):
+                    local_idx = [node_id_to_index[t] for t in local_node_tags]
+                    elem_coords = node_coords[local_idx]
+
+                    Mi, Ci, Ei, Li, Ri = elemental_matrices(3, elem_coords, D)
+
+                    dof_map = []
+                    for ni in local_idx:
+                        dof_map.extend([3*ni, 3*ni+1, 3*ni+2])
+
+                    for a in range(12):
+                        for b in range(12):
+                            M_global[dof_map[a], dof_map[b]] += Mi[a, b]
+                            C_global[dof_map[a], dof_map[b]] += Ci[a, b]
+                            E_global[dof_map[a], dof_map[b]] += Ei[a, b]
+                        for b in range(6):
+                            L_global[dof_map[a], b] += Li[a, b]
+                            R_global[dof_map[a], b] += Ri[a, b]
+    return
