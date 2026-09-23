@@ -166,7 +166,7 @@ def evaluate_SC_TC(K):
     xt = np.array([Y[2, 1], -Y[2, 0]])
     return xs, xt
 
-def evaluate_stiffness()
+def evaluate_stiffness():
     """Main wrapper function."""
     node_tags, node_coords_flat, _ = gmsh.model.mesh.getNodes()
     node_coords = node_coords_flat.reshape(-1, 3)[:, :2]
