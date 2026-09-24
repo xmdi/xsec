@@ -66,3 +66,6 @@ def test_fe_core():
     evaluate_stiffness()
 
     gmsh.finalize()
+
+if __name__ == "__main__":
+    test_fe_core()

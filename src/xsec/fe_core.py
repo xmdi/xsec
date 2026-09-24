@@ -1,5 +1,6 @@
 import numpy as np
 import gmsh
+from scipy.sparse import lil_matrix
 
 def evaluate_gauss_point(element_type, nodes, gp):
     """Evaluates and returns all matrices used in the Gaussian integration. All inputs should be np.float64"""
@@ -173,15 +174,21 @@ def evaluate_stiffness():
     node_id_to_index = {tag: i for i, tag in enumerate(node_tags)}
     n_dof = 3 * len(node_tags)
 
-    M_global = np.zeros((n_dof, n_dof))
-    _global = np.zeros((n_dof, n_dof))
-    E_global = np.zeros((n_dof, n_dof))
-    L_global = np.zeros((n_dof, 6))
-    R_global = np.zeros((n_dof, 6))
+    #M_global = np.zeros((n_dof, n_dof))
+    M_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
+    #C_global = np.zeros((n_dof, n_dof))
+    C_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
+    #E_global = np.zeros((n_dof, n_dof))
+    E_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
+    #L_global = np.zeros((n_dof, 6))
+    L_global = lil_matrix((n_dof, 6), dtype=np.float64)
+    #R_global = np.zeros((n_dof, 6))
+    R_global = lil_matrix((n_dof, 6), dtype=np.float64)
 
     for dim, group_tag in gmsh.model.getPhysicalGroups(2):
         name = gmsh.model.getPhysicalName(dim, group_tag)
-        D = material_D_matrices[name]   # look up this component's D once per group
+        # D = material_D_matrices[name]   # look up this component's D once per group
+        D = constitutive_matrix_isotropic(10e9, .3)
 
         for surf_tag in gmsh.model.getEntitiesForPhysicalGroup(dim, group_tag):
             elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, surf_tag)
@@ -193,7 +200,7 @@ def evaluate_stiffness():
                     local_idx = [node_id_to_index[t] for t in local_node_tags]
                     elem_coords = node_coords[local_idx]
 
-                    Mi, Ci, Ei, Li, Ri = elemental_matrices(3, elem_coords, D)
+                    Mi, Ci, Ei, Li, Ri = elemental_matrices(3, D, elem_coords)
 
                     dof_map = []
                     for ni in local_idx:
@@ -207,4 +214,16 @@ def evaluate_stiffness():
                         for b in range(6):
                             L_global[dof_map[a], b] += Li[a, b]
                             R_global[dof_map[a], b] += Ri[a, b]
+
+    M_global = M_global.tocsr()
+    C_global = C_global.tocsr()
+    E_global = E_global.tocsr()
+    L_global = L_global.tocsr()
+    R_global = R_global.tocsr()
+
+    np.set_printoptions(threshold=np.inf, linewidth=np.inf, precision=2, suppress=True)
+    print(E_global)
+
+    #np.savetxt("global_stiffness_matrix.txt", E_global, fmt="%8.2f")
+
     return
