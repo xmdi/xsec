@@ -181,7 +181,7 @@ def solve_bordered(lu,rhs_n,n):
     sol = lu.solve(rhs)
     return sol[:n], sol[n:]   # (d, lambda)
 
-def rigid_rotation_mode(node_coords, axis):
+def rigid_rotation_mode(node_coords, axis): # doesn't work? bugged?
     """axis='e1' -> rotation about e1; axis='e2' -> rotation about e2"""
     n_nodes = node_coords.shape[0]
     n_dof = 3 * n_nodes
@@ -203,7 +203,7 @@ def build_b(M, H, c10, c20, c0_i1, c0_i2):
     rhs = -M @ c0_i1 + H @ c0_i2
     return np.array([c10 @ rhs, c20 @ rhs])
 
-def evaluate_stiffness():
+def evaluate_stiffness(material_D_matrices):
     """Main wrapper function."""
     node_tags, node_coords_flat, _ = gmsh.model.mesh.getNodes()
     node_coords = node_coords_flat.reshape(-1, 3)[:, :2]
@@ -211,25 +211,19 @@ def evaluate_stiffness():
     n_dof = 3 * len(node_tags)
     n_nodes = len(node_tags)
 
-    #M_global = np.zeros((n_dof, n_dof))
     M_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
-    #C_global = np.zeros((n_dof, n_dof))
     C_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
-    #E_global = np.zeros((n_dof, n_dof))
     E_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
     L_global = np.zeros((n_dof, 6))
-    #L_global = lil_matrix((n_dof, 6), dtype=np.float64)
     R_global = np.zeros((n_dof, 6))
-    #R_global = lil_matrix((n_dof, 6), dtype=np.float64)
 
     for dim, group_tag in gmsh.model.getPhysicalGroups(2):
         name = gmsh.model.getPhysicalName(dim, group_tag)
-        # D = material_D_matrices[name]   # look up this component's D once per group
-        D = constitutive_matrix_isotropic(10e9, .3)
+        D = material_D_matrices[name]   # look up this component's D once per group
+        # D = constitutive_matrix_isotropic(10e9, .3)
 
         for surf_tag in gmsh.model.getEntitiesForPhysicalGroup(dim, group_tag):
             elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, surf_tag)
-            print(len(elem_tags))
             for etype, etags, enodes in zip(elem_types, elem_tags, elem_node_tags):
                 nodes_per_elem = len(enodes) // len(etags)
                 enodes = enodes.reshape(-1, nodes_per_elem)
@@ -253,18 +247,10 @@ def evaluate_stiffness():
                             L_global[dof_map[a], b] += Li[a, b]
                             R_global[dof_map[a], b] += Ri[a, b]
 
-    #M_global = M_global.tocsr()
-    #C_global = C_global.tocsr()
-    #E_global = E_global.tocsr()
-    #L_global = L_global.tocsr()
-    #R_global = R_global.tocsr()
-
     M = csc_matrix(M_global)
     E = csc_matrix(E_global)
     H = csc_matrix(C_global - C_global.T)     # Eq. (8): H = C - C^T
     C = csc_matrix(C_global)
-    #L = np.asarray(L_global.todense()) if hasattr(L, "todense") else np.asarray(L)
-    #R = np.asarray(R_global.todense()) if hasattr(R, "todense") else np.asarray(R)
 
     c10 = np.zeros(n_dof)  # translation along e3
     c20 = np.zeros(n_dof)  # rotation about e3
@@ -282,9 +268,9 @@ def evaluate_stiffness():
 
     U = np.vstack([c10, c20, c30, c40])   # (4, n) constraint matrix
 
-    for name, c0 in [("c10", c10), ("c20", c20), ("c30", c30), ("c40", c40)]:
-        resid = np.linalg.norm(E @ c0)
-        print(f"{name}: |E @ c0| = {resid:.3e} (should be ~0)")
+    #for name, c0 in [("c10", c10), ("c20", c20), ("c30", c30), ("c40", c40)]:
+    #    resid = np.linalg.norm(E @ c0)
+    #    print(f"{name}: |E @ c0| = {resid:.3e} (should be ~0)")
 
     U_sp = csc_matrix(U)
     K_bordered = bmat([[E, U_sp.T], [U_sp, None]], format='csc')
@@ -294,25 +280,25 @@ def evaluate_stiffness():
     c11, lam11 = solve_bordered(lu, -H @ c10, n_dof)   # Eq. 12 for traction chain
     c21, lam21 = solve_bordered(lu, -H @ c20, n_dof)   # Eq. 12 for torsion chain
 
-    c0_31 = rigid_rotation_mode(node_coords, axis='e2')   # bending chain 3 (starts from c30)
-    c0_41 = rigid_rotation_mode(node_coords, axis='e1')   # bending chain 4 (starts from c40)
+    # apparently wrong
+    #c0_31 = rigid_rotation_mode(node_coords, axis='e2')   # bending chain 3 (starts from c30)
+    #c0_41 = rigid_rotation_mode(node_coords, axis='e1')   # bending chain 4 (starts from c40)
 
     c0_31, lam0_31 = solve_bordered(lu, -H @ c30, n_dof)
     c0_41, lam0_41 = solve_bordered(lu, -H @ c40, n_dof)
-    print("|lam0_31|:", np.linalg.norm(lam0_31), " |lam0_41|:", np.linalg.norm(lam0_41))
-    print("c0_31 Eq(12) residual:", np.linalg.norm(E @ c0_31 - (-H @ c30)))
-    print("c0_41 Eq(12) residual:", np.linalg.norm(E @ c0_41 - (-H @ c40)))
-
+    #print("|lam0_31|:", np.linalg.norm(lam0_31), " |lam0_41|:", np.linalg.norm(lam0_41))
+    #print("c0_31 Eq(12) residual:", np.linalg.norm(E @ c0_31 - (-H @ c30)))
+    #print("c0_41 Eq(12) residual:", np.linalg.norm(E @ c0_41 - (-H @ c40)))
 
     # sanity check: these should also be exactly in the nullspace of E
-    print("E @ c0_31:", np.linalg.norm(E @ c0_31))
-    print("E @ c0_41:", np.linalg.norm(E @ c0_41))
+    #print("E @ c0_31:", np.linalg.norm(E @ c0_31))
+    #print("E @ c0_41:", np.linalg.norm(E @ c0_41))
 
     c0_32, lam0_32 = solve_bordered(lu, -H @ c0_31 + M @ c30, n_dof)
     c0_42, lam0_42 = solve_bordered(lu, -H @ c0_41 + M @ c40, n_dof)
 
     # Build A per Eq. (15)
-    top = np.vstack([c10, c20])                       # (2, n)
+    #top = np.vstack([c10, c20])                       # (2, n)
     MH  = np.hstack([M.toarray() if hasattr(M,'toarray') else M,
                   -H.toarray() if hasattr(H,'toarray') else -H])  # (n, 2n) -- careful with shapes
 
@@ -330,7 +316,7 @@ def evaluate_stiffness():
     n1 = np.linalg.solve(A, b1)   # Eq. 14
     n2 = np.linalg.solve(A, b2)
 
-        # Update per Eq. (17)
+    # Update per Eq. (17)
     c31 = c0_31 + c10*n1[0] + c20*n1[1]
     c32 = c0_32 + c11*n1[0] + c21*n1[1]
 
@@ -340,21 +326,9 @@ def evaluate_stiffness():
     c33, lam33 = solve_bordered(lu, -H @ c32 + M @ c31, n_dof)
     c43, lam43 = solve_bordered(lu, -H @ c42 + M @ c41, n_dof)
 
-    print("det(A):", np.linalg.det(A))
-    print("cond(A):", np.linalg.cond(A))
-    print("|n1|:", np.linalg.norm(n1), " |n2|:", np.linalg.norm(n2))
-    print("|c31|:", np.linalg.norm(c31), " |c32|:", np.linalg.norm(c32))
-    print("|c41|:", np.linalg.norm(c41), " |c42|:", np.linalg.norm(c42))
-    print("|c33|:", np.linalg.norm(c33), " |c43|:", np.linalg.norm(c43))
-
-    print("|c10|:", np.linalg.norm(c10), " |c11|:", np.linalg.norm(c11))
-    print("|c20|:", np.linalg.norm(c20), " |c21|:", np.linalg.norm(c21))
-    print("|c0_31|:", np.linalg.norm(c0_31), " |c0_32|:", np.linalg.norm(c0_32))
-    print("|c0_41|:", np.linalg.norm(c0_41), " |c0_42|:", np.linalg.norm(c0_42))
-
-    E_dense = E.toarray()
-    eigE = np.linalg.eigvalsh(E_dense)
-    print("6 smallest E eigenvalues:", np.sort(eigE)[:6])
+    #E_dense = E.toarray()
+    #eigE = np.linalg.eigvalsh(E_dense)
+    #print("6 smallest E eigenvalues:", np.sort(eigE)[:6])
 
     u3_block  = np.column_stack([c10, c20, c31, c32, c41, c42])   # (n,6)
     u_block = np.column_stack([c11, c21, c32, c33, c42, c43])   # (n,6)
@@ -380,52 +354,45 @@ def evaluate_stiffness():
         np.column_stack([c10,   c20,   c30,   c0_31, c40,  c0_41])
     ])
 
-    BlockQr = Block @ Qr
-    print("Rigid energy check (should be ~0):", np.abs(Qr.T @ BlockQr).max())
+    #BlockQr = Block @ Qr
+    #print("Rigid energy check (should be ~0):", np.abs(Qr.T @ BlockQr).max())
 
-    eig_lhs = np.linalg.eigvalsh(lhs)
-    print("lhs eigenvalues:", eig_lhs) 
+    #eig_lhs = np.linalg.eigvalsh(lhs)
+    #print("lhs eigenvalues:", eig_lhs) 
 
     #assert np.allclose(K, K.T, atol=1e-6*np.abs(K).max())
-    eigvals = np.linalg.eigvalsh(K)
+    #eigvals = np.linalg.eigvalsh(K)
     #assert np.all(eigvals > 0), f"Non-PD stiffness: {eigvals}"
-    print("K33 (axial stiffness EA):", K[2,2])   # per this paper's t=[t1,t2,t3] ordering
+    #print("K33 (axial stiffness EA):", K[2,2])   # per this paper's t=[t1,t2,t3] ordering
 
     #np.set_printoptions(threshold=np.inf, linewidth=np.inf, precision=2, suppress=True)
-    print(K)
+    #print(K)
 
     # Verify c0_42 actually solves its defining equation (Eq. 13, i=2, chain 4)
-    resid_42 = E @ c0_42 - (-M @ c40 + H @ c0_41)  # or +H depending on your exact Eq(13) sign
-    print("chain4 c0_42 residual:", np.linalg.norm(resid_42))
+    #resid_42 = E @ c0_42 - (-M @ c40 + H @ c0_41)  # or +H depending on your exact Eq(13) sign
+    #print("chain4 c0_42 residual:", np.linalg.norm(resid_42))
 
     # Compare directly against chain 3's equivalent
-    resid_32 = E @ c0_32 - (-M @ c30 + H @ c0_31)
-    print("chain3 c0_32 residual:", np.linalg.norm(resid_32))
+    #resid_32 = E @ c0_32 - (-M @ c30 + H @ c0_31)
+    #print("chain3 c0_32 residual:", np.linalg.norm(resid_32))
 
-    print("|lam0_32|:", np.linalg.norm(lam0_32))
-    print("|lam0_42|:", np.linalg.norm(lam0_42))
+    #print("|lam0_32|:", np.linalg.norm(lam0_32))
+    #print("|lam0_42|:", np.linalg.norm(lam0_42))
 
-    resid_c0_31 = E @ c0_31 - (-H @ c30)
-    resid_c0_41 = E @ c0_41 - (-H @ c40)
-    print("c0_31 Eq(12) residual:", np.linalg.norm(resid_c0_31), " relative to |E@c0_31|:", np.linalg.norm(E@c0_31))
-    print("c0_41 Eq(12) residual:", np.linalg.norm(resid_c0_41), " relative to |E@c0_41|:", np.linalg.norm(E@c0_41))
+    #resid_c0_31 = E @ c0_31 - (-H @ c30)
+    #resid_c0_41 = E @ c0_41 - (-H @ c40)
+    #print("c0_31 Eq(12) residual:", np.linalg.norm(resid_c0_31), " relative to |E@c0_31|:", np.linalg.norm(E@c0_31))
+    #print("c0_41 Eq(12) residual:", np.linalg.norm(resid_c0_41), " relative to |E@c0_41|:", np.linalg.norm(E@c0_41))
 
-    print("|H @ c0_31|:", np.linalg.norm(H @ c0_31))
-    print("|H @ c0_41|:", np.linalg.norm(H @ c0_41))
-    print("|M @ c30|:", np.linalg.norm(M @ c30))
-    print("|M @ c40|:", np.linalg.norm(M @ c40))
+    #print("|H @ c0_31|:", np.linalg.norm(H @ c0_31))
+    #print("|H @ c0_41|:", np.linalg.norm(H @ c0_41))
+    #print("|M @ c30|:", np.linalg.norm(M @ c30))
+    #print("|M @ c40|:", np.linalg.norm(M @ c40))
 
-    def check_orthogonality(vec, label):
-        print(f"{label}: c10·v={c10@vec:.3e}  c20·v={c20@vec:.3e}  c30·v={c30@vec:.3e}  c40·v={c40@vec:.3e}")
+    #def check_orthogonality(vec, label):
+    #    print(f"{label}: c10·v={c10@vec:.3e}  c20·v={c20@vec:.3e}  c30·v={c30@vec:.3e}  c40·v={c40@vec:.3e}")
 
-    check_orthogonality(-H @ c30, "-H@c30")
-    check_orthogonality(-H @ c40, "-H@c40")
-   
+    #check_orthogonality(-H @ c30, "-H@c30")
+    #check_orthogonality(-H @ c40, "-H@c40")
 
-    xs, xt = evaluate_SC_TC(K)
-    print(xs)
-    print(xt)
-
-    #np.savetxt("global_stiffness_matrix.txt", E_global, fmt="%8.2f")
-
-    return
+    return K
