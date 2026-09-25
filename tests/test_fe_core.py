@@ -9,7 +9,7 @@ def test_fe_core():
     gmsh.model.add("semicircle")
     gmsh.option.setNumber("General.Terminal", 1)
 
-    thickness = 0.1
+    thickness = 0.01
     circumferential_elements = 100
     thickness_elements = 5
 
