@@ -118,6 +118,7 @@ def constitutive_matrix_orthotropic(E1, E2, E3, v12, v13, v23, G12, G13, G23):
 
 def elemental_matrices(element_type,D,DS,SDS,nodes):
     """Generates elemental matrices Mi, Ci, Ei, Li & Ri."""
+    # definitions in eqs 10, 26 & 27 in Lin 2025
     if element_type == 3: # bilinear quad
         gp0 = 1.0 / np.sqrt(3.0)
         gps = np.array([
@@ -153,6 +154,7 @@ def elemental_matrices(element_type,D,DS,SDS,nodes):
 
 def evaluate_SC_TC(K):
     """Evaluates shear center and tension center."""
+    # math following equation 31 in Lin 2025
     Kt = K[0:3, 0:3]
     Kc = K[0:3, 3:6]
     Kt_inv = np.linalg.inv(Kt)
@@ -163,6 +165,7 @@ def evaluate_SC_TC(K):
 
 def evaluate_decoupled_K(K):
     """Decouples bending/torsional stiffness from shear/axial coupling."""
+    # math following equation 32 in Lin 2025
     Kt = K[0:3, 0:3]
     Kc = K[0:3, 3:6]
     Km = K[3:6, 3:6]
@@ -199,6 +202,7 @@ def rigid_rotation_mode(node_coords, axis): # doesn't work? bugged?
     return c0
 
 def build_b(M, H, c10, c20, c0_i1, c0_i2):
+    # per Lin 2025 eq 16
     rhs = -M @ c0_i1 + H @ c0_i2
     return np.array([c10 @ rhs, c20 @ rhs])
 
@@ -206,15 +210,14 @@ def evaluate_stiffness(material_D_matrices):
     """Main wrapper function."""
     node_tags, node_coords_flat, _ = gmsh.model.mesh.getNodes()
     node_coords = node_coords_flat.reshape(-1, 3)[:, :2]
-    node_id_to_index = {tag: i for i, tag in enumerate(node_tags)}
     n_dof = 3 * len(node_tags)
     n_nodes = len(node_tags)
 
-    # Accumulate triples to assemble these matrices directly
+    # accumulate triples assemble M,C,E matrices directly
     rows_MCE, cols_MCE = [], []
     data_M, data_C, data_E = [], [], []
 
-    rows_LR, cols_LR = [], []   # (12,6) blocks
+    rows_LR, cols_LR = [], []   # 12x6 blocks
     data_L, data_R = [], []
 
     S = np.array([
@@ -225,83 +228,90 @@ def evaluate_stiffness(material_D_matrices):
         [0.0, 1.0, 0.0],
         [0.0, 0.0, 1.0]])
     
-    local_r12_pattern = np.repeat(np.arange(12), 12)   # (144,) -> [0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2 ... 11 11 11]
-    local_c12_pattern = np.tile(np.arange(12), 12)     # (144,) -> [0 1 2 3 4 5 6 7 8 9 10 11 0 1 2 3 .... 9 10 11]
-    local_r6_pattern  = np.repeat(np.arange(12), 6)    # (72,)
-    local_c6_pattern  = np.tile(np.arange(6), 12)      # (72,)
+    local_r12_pattern = np.repeat(np.arange(12), 12)   # (144,) -> [twelve zeros, twelve ones, twelve twos...twelve elevens]
+    local_c12_pattern = np.tile(np.arange(12), 12)     # (144,) -> [1-11, 1-11, 1-11 (twelve times)]
+    local_r6_pattern  = np.repeat(np.arange(12), 6)    # (72,) -> [six zeros, six ones... six elevens)
+    local_c6_pattern  = np.tile(np.arange(6), 12)      # (72,) -> [1-5, 1-5, 1-5 (twelve times)]
 
     tag_to_idx = np.zeros(node_tags.max() + 1, dtype=np.int64)
-    tag_to_idx[node_tags] = np.arange(len(node_tags))
+    tag_to_idx[node_tags] = np.arange(len(node_tags)) # number of each node (extra unused zero because gmsh starts at 1)
 
-    for dim, group_tag in gmsh.model.getPhysicalGroups(2):
-        name = gmsh.model.getPhysicalName(dim, group_tag)
-        D = material_D_matrices[name]   # look up this component's D once per group
-        DS = D @ S
-        SDS = S.T @ DS
+    for dim, group_tag in gmsh.model.getPhysicalGroups(2): # loop over physical groups
+        name = gmsh.model.getPhysicalName(dim, group_tag) # material name extraction
+        D = material_D_matrices[name] # look up this component's D once per group
+        DS = D @ S # precompute D*S
+        SDS = S.T @ DS # precompute S*D*S
  
         for surf_tag in gmsh.model.getEntitiesForPhysicalGroup(dim, group_tag):
             elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, surf_tag)
+            # elem_types = gmsh element type, e.g 3 = 4-node quad
+            # elem_tags = element IDs
+            # elem_node_tags = node IDs listed in 1D array in element order
+
             for etype, etags, enodes in zip(elem_types, elem_tags, elem_node_tags):
-                nodes_per_elem = len(enodes) // len(etags)
-                enodes = enodes.reshape(-1, nodes_per_elem)
+                # etypes = gmsh element type, e.g 3 = 4-node quad
+                # etags = element IDs
+                # enodes = node IDs ilisted in 1D array in element order
+                # len(enodes) number of nodes of this type/material
+                # len(etags) number of elements of this type/material
+                nodes_per_elem = len(enodes) // len(etags) # compute number of nodes per elem
+                enodes = enodes.reshape(-1, nodes_per_elem) # reshape 1D node list to have rows for each elem
 
                 for et, local_node_tags in zip(etags, enodes):
-                    #local_idx = [node_id_to_index[t] for t in local_node_tags]
-                    #elem_coords = node_coords[local_idx]
+                    # et = element ID
+                    # local_node_tags = node IDs for this element
+                    local_idx = tag_to_idx[local_node_tags]        # vectorized lookup maps global gmsh node tag to global node row index (0 to num_nodes-1)
+                    dof_map = np.repeat(local_idx * 3, 3) + np.tile(np.arange(3), 4)   # vectorized dof_map
 
-                    local_idx = tag_to_idx[local_node_tags]        # vectorized lookup (from earlier suggestion)
-                    dof_map = np.repeat(local_idx * 3, 3) + np.tile(np.arange(3), 4)   # vectorized dof_map, no python loop
-
+                    # dof map = actual dof ID row/column into matrices from that local element nodes
                     r12 = dof_map[local_r12_pattern]   # just a gather, no tile/repeat call
                     c12 = dof_map[local_c12_pattern]
                     r6  = dof_map[local_r6_pattern]
                     c6  = local_c6_pattern             # column indices 0-5 don't depend on dof_map at all!
+                   
+                    # r12, c12 map the local element node IDs to row and column IDs in the massive global matrices for which each element has a 12x12 contribution
+                    # r6, c6 map the local element node IDs to row and column IDs in the massive global matrices for which each element has a 6x6 contribution, note that the column ID has to do with mapping to the sectional force, so no dependance on the DOF whatsoever
                     
-                    elem_coords = node_coords[local_idx]
-                    Mi, Ci, Ei, Li, Ri = elemental_matrices(3, D, DS, SDS, elem_coords)
-                    
-                    #dof_map = np.empty(12, dtype=np.int64)
-                    #for k, ni in enumerate(local_idx):
-                    #    dof_map[3*k:3*k+3] = [3*ni, 3*ni+1, 3*ni+2]
+                    elem_coords = node_coords[local_idx] # nodal coordinates for this element
+                    Mi, Ci, Ei, Li, Ri = elemental_matrices(etype, D, DS, SDS, elem_coords) # local matrices
 
-                    # --- (12,12) blocks: Mi, Ci, Ei ---
-                    #r12 = np.repeat(dof_map, 12)
-                    #c12 = np.tile(dof_map, 12)
-                    rows_MCE.append(r12)
-                    cols_MCE.append(c12)
-                    data_M.append(Mi.flatten())
-                    data_C.append(Ci.flatten())
-                    data_E.append(Ei.flatten())
+                    rows_MCE.append(r12) # assemble list of row IDs for M/C/E
+                    cols_MCE.append(c12) # assemble list of col IDs for M/C/E
+                    data_M.append(Mi.flatten()) # corresponding M values at these row/cols
+                    data_C.append(Ci.flatten()) # corresponding C values at these row/cols
+                    data_E.append(Ei.flatten()) # corresponding E values at these row/cols
 
-                    # --- (12,6) blocks: Li, Ri ---
-                    #r6 = np.repeat(dof_map, 6)
-                    #c6 = np.tile(np.arange(6), 12)
-                    rows_LR.append(r6)
-                    cols_LR.append(c6)
-                    data_L.append(Li.flatten())
-                    data_R.append(Ri.flatten())
+                    rows_LR.append(r6) # assemble list of row IDs for L/R
+                    cols_LR.append(c6) # assemble list of col IDs for L/R
+                    data_L.append(Li.flatten()) # corresponding L values at these row/cols
+                    data_R.append(Ri.flatten()) # corresponding R values at these row/cols
 
+    # concatenate the entries from the row/col lists
     rows_MCE = np.concatenate(rows_MCE)
     cols_MCE = np.concatenate(cols_MCE)
+    rows_LR = np.concatenate(rows_LR)
+    cols_LR = np.concatenate(cols_LR)
+ 
+    # assemble the actual sparse global matrices directly
     M_global = coo_matrix((np.concatenate(data_M), (rows_MCE, cols_MCE)), shape=(n_dof, n_dof)).tocsc()
     C_global = coo_matrix((np.concatenate(data_C), (rows_MCE, cols_MCE)), shape=(n_dof, n_dof)).tocsc()
     E_global = coo_matrix((np.concatenate(data_E), (rows_MCE, cols_MCE)), shape=(n_dof, n_dof)).tocsc()
-
-    rows_LR = np.concatenate(rows_LR)
-    cols_LR = np.concatenate(cols_LR)
     L_global = coo_matrix((np.concatenate(data_L), (rows_LR, cols_LR)), shape=(n_dof, 6)).toarray()
     R_global = coo_matrix((np.concatenate(data_R), (rows_LR, cols_LR)), shape=(n_dof, 6)).toarray()
 
     M = M_global
     E = E_global
-    H = csc_matrix(C_global - C_global.T)     # Eq. (8): H = C - C^T
     C = C_global
+    H = csc_matrix(C_global - C_global.T)     # H = C - C^T, equation 13 in Morandini 2010
+    # and following equation 8 in Lin 2025
 
+    # initialize starting eigenvectors for rigid body motion
     c10 = np.zeros(n_dof)  # translation along e3
     c20 = np.zeros(n_dof)  # rotation about e3
     c30 = np.zeros(n_dof)  # translation along e1
     c40 = np.zeros(n_dof)  # translation along e2
 
+    # populate starting eigenvectors
     for k in range(n_nodes):
         x1, x2 = node_coords[k]
         idx = 3*k
@@ -311,39 +321,37 @@ def evaluate_stiffness(material_D_matrices):
         c30[idx+0] = 1.0            # u1 = 1
         c40[idx+1] = 1.0            # u2 = 1
 
-    U = np.vstack([c10, c20, c30, c40])   # (4, n) constraint matrix
+    phi = np.vstack([c10, c20, c30, c40])   # (4, n) constraint matrix, comprised of the rigid body eigenvectors
+    # basically phi*d (dof displacement) needs to be 0, that constrains the singular matrix E, letting you solve E*d=r
 
-    #for name, c0 in [("c10", c10), ("c20", c20), ("c30", c30), ("c40", c40)]:
-    #    resid = np.linalg.norm(E @ c0)
-    #    print(f"{name}: |E @ c0| = {resid:.3e} (should be ~0)")
+    phi_sp = csc_matrix(phi) # sparse version of phi
+    K_bordered = bmat([[E, phi_sp.T], [phi_sp, None]], format='csc') # for equation 44 in Morandini 2010 (Appendix)
+    lu = splu(K_bordered) # solve system into lu object to back substitute through
 
-    U_sp = csc_matrix(U)
-    K_bordered = bmat([[E, U_sp.T], [U_sp, None]], format='csc')
+    c11, lam11 = solve_bordered(lu, -H @ c10, n_dof)   # Lin 2025 eq 12 for traction chain
+    c21, lam21 = solve_bordered(lu, -H @ c20, n_dof)   # Lin 2025 eq 12 for torsion chain
 
-    lu = splu(K_bordered)
-
-    c11, lam11 = solve_bordered(lu, -H @ c10, n_dof)   # Eq. 12 for traction chain
-    c21, lam21 = solve_bordered(lu, -H @ c20, n_dof)   # Eq. 12 for torsion chain
-
-    # apparently wrong
+    # apparently wrong, TODO: figure out why
     #c0_31 = rigid_rotation_mode(node_coords, axis='e2')   # bending chain 3 (starts from c30)
     #c0_41 = rigid_rotation_mode(node_coords, axis='e1')   # bending chain 4 (starts from c40)
+    
+    # the naive closed-form guess above (u3=+/-x1 or x2 only) seems to NOT satisfy eq 12
+    # in general -- verified empirically via residual check (E@c0 - (-H@c_leading) is
+    # large, ~1e9, not ~0). Solving directly via solve_bordered works because 
+    # -H@c30 and -H@c40 are orthogonal to E's nullspace (checked via dot
+    # products against c10,c20,c30,c40), so eq 12 is solvable even without a
+    # hand-derived closed form. Left disabled rather than deleted in case a correct
+    # analytic formula is found later.
 
+    # as explained after Lin 2025 eq 12, we can compute these 31 and 32 "generalized" eigenvectors the same was as before, though they should be able to compute analytically
     c0_31, lam0_31 = solve_bordered(lu, -H @ c30, n_dof)
     c0_41, lam0_41 = solve_bordered(lu, -H @ c40, n_dof)
-    #print("|lam0_31|:", np.linalg.norm(lam0_31), " |lam0_41|:", np.linalg.norm(lam0_41))
-    #print("c0_31 Eq(12) residual:", np.linalg.norm(E @ c0_31 - (-H @ c30)))
-    #print("c0_41 Eq(12) residual:", np.linalg.norm(E @ c0_41 - (-H @ c40)))
 
-    # sanity check: these should also be exactly in the nullspace of E
-    #print("E @ c0_31:", np.linalg.norm(E @ c0_31))
-    #print("E @ c0_41:", np.linalg.norm(E @ c0_41))
-
+    # per eq 13 in Lin 2025, compute "generalized" eigenvectors 32 and 42
     c0_32, lam0_32 = solve_bordered(lu, -H @ c0_31 + M @ c30, n_dof)
     c0_42, lam0_42 = solve_bordered(lu, -H @ c0_41 + M @ c40, n_dof)
 
-    # Build A per Eq. (15)
-
+    # to build A per Lin 2025 eq 15:
     Mc10, Mc20 = M @ c10, M @ c20
     Hc11, Hc21 = H @ c11, H @ c21
     col0 = Mc10 - Hc11   # M*c10 - H*c11  (matches [M -H] @ [c10; c11])
@@ -351,90 +359,43 @@ def evaluate_stiffness(material_D_matrices):
     A = np.array([
         [c10 @ col0, c10 @ col1],
         [c20 @ col0, c20 @ col1]])
-
+    
+    # build b1 and b2 per Lin 2025 eq 16:
     b1 = build_b(M, H, c10, c20, c0_31, c0_32)
     b2 = build_b(M, H, c10, c20, c0_41, c0_42)
 
-    n1 = np.linalg.solve(A, b1)   # Eq. 14
+    # solve n1 and n2 per Lin 2025 eq 14:
+    n1 = np.linalg.solve(A, b1)
     n2 = np.linalg.solve(A, b2)
 
-    # Update per Eq. (17)
+    # "orthogonalize" c31, c32, c41, c42 per Lin 2025 eq 17:
     c31 = c0_31 + c10*n1[0] + c20*n1[1]
     c32 = c0_32 + c11*n1[0] + c21*n1[1]
-
     c41 = c0_41 + c10*n2[0] + c20*n2[1]
     c42 = c0_42 + c11*n2[0] + c21*n2[1]
 
+    # back to Lin 2025 eq 13 to compute c33 and c43
     c33, lam33 = solve_bordered(lu, -H @ c32 + M @ c31, n_dof)
     c43, lam43 = solve_bordered(lu, -H @ c42 + M @ c41, n_dof)
 
-    #E_dense = E.toarray()
-    #eigE = np.linalg.eigvalsh(E_dense)
-    #print("6 smallest E eigenvalues:", np.sort(eigE)[:6])
-
+    # assemble Qd per Lin 2025 eq 22
     u3_block  = np.column_stack([c10, c20, c31, c32, c41, c42])   # (n,6)
     u_block = np.column_stack([c11, c21, c32, c33, c42, c43])   # (n,6)
     Qd = np.vstack([u3_block, u_block])                           # (2n,6), matches [u,3; u]
 
+    # assemble entire left-hand side in Lin 2025 eq 29:
     Block = bmat([[M, C.T], [C, E]], format='csc')   # (2n,2n)
     BlockQd = Block @ Qd                              # (2n,6)
-
     lhs = Qd.T @ BlockQd                              # (6,6)
-    LR = np.vstack([L_global, R_global])                            # (2n,6)
+    
+    # assemble entire right-hand side in Lin 2025 eq 29:
+    LR = np.vstack([L_global, R_global])            # (2n,6)
     rhs = Qd.T @ LR                                   # (6,6)
 
+    # solve G in Lin 2025 eq 29:
     G = np.linalg.solve(lhs, rhs)
 
+    # compute sectional stiffness matrix using Lin 2025 eq 30
     K = G.T @ lhs @ G   # (6,6), reusing lhs = Qd.T @ Block @ Qd from above
   
-    zeros = np.zeros_like(c10)
-
-    Qr = np.vstack([
-        # top block: u,3
-        np.column_stack([zeros, zeros, zeros, c30, zeros, c40]),
-        # bottom block: u
-        np.column_stack([c10,   c20,   c30,   c0_31, c40,  c0_41])
-    ])
-
-    #BlockQr = Block @ Qr
-    #print("Rigid energy check (should be ~0):", np.abs(Qr.T @ BlockQr).max())
-
-    #eig_lhs = np.linalg.eigvalsh(lhs)
-    #print("lhs eigenvalues:", eig_lhs) 
-
-    #assert np.allclose(K, K.T, atol=1e-6*np.abs(K).max())
-    #eigvals = np.linalg.eigvalsh(K)
-    #assert np.all(eigvals > 0), f"Non-PD stiffness: {eigvals}"
-    #print("K33 (axial stiffness EA):", K[2,2])   # per this paper's t=[t1,t2,t3] ordering
-
-    #np.set_printoptions(threshold=np.inf, linewidth=np.inf, precision=2, suppress=True)
-    #print(K)
-
-    # Verify c0_42 actually solves its defining equation (Eq. 13, i=2, chain 4)
-    #resid_42 = E @ c0_42 - (-M @ c40 + H @ c0_41)  # or +H depending on your exact Eq(13) sign
-    #print("chain4 c0_42 residual:", np.linalg.norm(resid_42))
-
-    # Compare directly against chain 3's equivalent
-    #resid_32 = E @ c0_32 - (-M @ c30 + H @ c0_31)
-    #print("chain3 c0_32 residual:", np.linalg.norm(resid_32))
-
-    #print("|lam0_32|:", np.linalg.norm(lam0_32))
-    #print("|lam0_42|:", np.linalg.norm(lam0_42))
-
-    #resid_c0_31 = E @ c0_31 - (-H @ c30)
-    #resid_c0_41 = E @ c0_41 - (-H @ c40)
-    #print("c0_31 Eq(12) residual:", np.linalg.norm(resid_c0_31), " relative to |E@c0_31|:", np.linalg.norm(E@c0_31))
-    #print("c0_41 Eq(12) residual:", np.linalg.norm(resid_c0_41), " relative to |E@c0_41|:", np.linalg.norm(E@c0_41))
-
-    #print("|H @ c0_31|:", np.linalg.norm(H @ c0_31))
-    #print("|H @ c0_41|:", np.linalg.norm(H @ c0_41))
-    #print("|M @ c30|:", np.linalg.norm(M @ c30))
-    #print("|M @ c40|:", np.linalg.norm(M @ c40))
-
-    #def check_orthogonality(vec, label):
-    #    print(f"{label}: c10·v={c10@vec:.3e}  c20·v={c20@vec:.3e}  c30·v={c30@vec:.3e}  c40·v={c40@vec:.3e}")
-
-    #check_orthogonality(-H @ c30, "-H@c30")
-    #check_orthogonality(-H @ c40, "-H@c40")
-
     return K
