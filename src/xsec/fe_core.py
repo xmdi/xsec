@@ -1,6 +1,6 @@
 import numpy as np
 import gmsh
-from scipy.sparse import csc_matrix, bmat, lil_matrix
+from scipy.sparse import coo_matrix, csc_matrix, bmat, lil_matrix
 from scipy.sparse.linalg import splu
 
 def evaluate_gauss_point(element_type, nodes, gp):
@@ -116,19 +116,8 @@ def constitutive_matrix_orthotropic(E1, E2, E3, v12, v13, v23, G12, G13, G23):
     D[4, 4] = G23
     return D
 
-negative_count=0
-
-def elemental_matrices(element_type,D,nodes):
+def elemental_matrices(element_type,D,DS,SDS,nodes):
     """Generates elemental matrices Mi, Ci, Ei, Li & Ri."""
-    S = np.array([
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [0.0, 0.0, 0.0],
-        [1.0, 0.0, 0.0],
-        [0.0, 1.0, 0.0],
-        [0.0, 0.0, 1.0]])
-    DS = D @ S
-    SDS = S.T @ DS
     if element_type == 3: # bilinear quad
         gp0 = 1.0 / np.sqrt(3.0)
         gps = np.array([
@@ -157,9 +146,6 @@ def elemental_matrices(element_type,D,nodes):
             Li += N.T @ SDS @ Z * dA # * w but gauss point weight = 1.0
             Ri += dN.T @ DS @ Z * dA # * w but gauss point weight = 1.0
             
-            global negative_count
-            if det_J < 0:
-                negative_count += 1
     else:
         raise ValueError(f"Unsupported element_type ({element_type}) in elemental_matrices().")
 
@@ -174,6 +160,19 @@ def evaluate_SC_TC(K):
     xs = np.array([-Y[1, 2], Y[0, 2]])
     xt = np.array([Y[2, 1], -Y[2, 0]])
     return xs, xt
+
+def evaluate_decoupled_K(K):
+    """Decouples bending/torsional stiffness from shear/axial coupling."""
+    Kt = K[0:3, 0:3]
+    Kc = K[0:3, 3:6]
+    Km = K[3:6, 3:6]
+    Kt_inv = np.linalg.inv(Kt)
+    Y = -Kt_inv @ Kc
+    Km_prime = Km - Y.T @ Kt @ Y
+    zeros = np.zeros((3, 3))
+    K_prime = np.block([[Kt, zeros],
+                       [zeros, Km_prime]])
+    return K_prime
 
 def solve_bordered(lu,rhs_n,n):
     rhs = np.zeros(n + 4)
@@ -211,17 +210,35 @@ def evaluate_stiffness(material_D_matrices):
     n_dof = 3 * len(node_tags)
     n_nodes = len(node_tags)
 
-    M_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
-    C_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
-    E_global = lil_matrix((n_dof, n_dof), dtype=np.float64)
-    L_global = np.zeros((n_dof, 6))
-    R_global = np.zeros((n_dof, 6))
+    # Accumulate triples to assemble these matrices directly
+    rows_MCE, cols_MCE = [], []
+    data_M, data_C, data_E = [], [], []
+
+    rows_LR, cols_LR = [], []   # (12,6) blocks
+    data_L, data_R = [], []
+
+    S = np.array([
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [0.0, 0.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0],
+        [0.0, 0.0, 1.0]])
+    
+    local_r12_pattern = np.repeat(np.arange(12), 12)   # (144,) -> [0 0 0 0 0 0 0 0 0 0 0 0 1 1 1 1 1 1 1 1 1 1 1 1 2 2 2 ... 11 11 11]
+    local_c12_pattern = np.tile(np.arange(12), 12)     # (144,) -> [0 1 2 3 4 5 6 7 8 9 10 11 0 1 2 3 .... 9 10 11]
+    local_r6_pattern  = np.repeat(np.arange(12), 6)    # (72,)
+    local_c6_pattern  = np.tile(np.arange(6), 12)      # (72,)
+
+    tag_to_idx = np.zeros(node_tags.max() + 1, dtype=np.int64)
+    tag_to_idx[node_tags] = np.arange(len(node_tags))
 
     for dim, group_tag in gmsh.model.getPhysicalGroups(2):
         name = gmsh.model.getPhysicalName(dim, group_tag)
         D = material_D_matrices[name]   # look up this component's D once per group
-        # D = constitutive_matrix_isotropic(10e9, .3)
-
+        DS = D @ S
+        SDS = S.T @ DS
+ 
         for surf_tag in gmsh.model.getEntitiesForPhysicalGroup(dim, group_tag):
             elem_types, elem_tags, elem_node_tags = gmsh.model.mesh.getElements(dim, surf_tag)
             for etype, etags, enodes in zip(elem_types, elem_tags, elem_node_tags):
@@ -229,28 +246,56 @@ def evaluate_stiffness(material_D_matrices):
                 enodes = enodes.reshape(-1, nodes_per_elem)
 
                 for et, local_node_tags in zip(etags, enodes):
-                    local_idx = [node_id_to_index[t] for t in local_node_tags]
+                    #local_idx = [node_id_to_index[t] for t in local_node_tags]
+                    #elem_coords = node_coords[local_idx]
+
+                    local_idx = tag_to_idx[local_node_tags]        # vectorized lookup (from earlier suggestion)
+                    dof_map = np.repeat(local_idx * 3, 3) + np.tile(np.arange(3), 4)   # vectorized dof_map, no python loop
+
+                    r12 = dof_map[local_r12_pattern]   # just a gather, no tile/repeat call
+                    c12 = dof_map[local_c12_pattern]
+                    r6  = dof_map[local_r6_pattern]
+                    c6  = local_c6_pattern             # column indices 0-5 don't depend on dof_map at all!
+                    
                     elem_coords = node_coords[local_idx]
+                    Mi, Ci, Ei, Li, Ri = elemental_matrices(3, D, DS, SDS, elem_coords)
+                    
+                    #dof_map = np.empty(12, dtype=np.int64)
+                    #for k, ni in enumerate(local_idx):
+                    #    dof_map[3*k:3*k+3] = [3*ni, 3*ni+1, 3*ni+2]
 
-                    Mi, Ci, Ei, Li, Ri = elemental_matrices(3, D, elem_coords)
+                    # --- (12,12) blocks: Mi, Ci, Ei ---
+                    #r12 = np.repeat(dof_map, 12)
+                    #c12 = np.tile(dof_map, 12)
+                    rows_MCE.append(r12)
+                    cols_MCE.append(c12)
+                    data_M.append(Mi.flatten())
+                    data_C.append(Ci.flatten())
+                    data_E.append(Ei.flatten())
 
-                    dof_map = []
-                    for ni in local_idx:
-                        dof_map.extend([3*ni, 3*ni+1, 3*ni+2])
+                    # --- (12,6) blocks: Li, Ri ---
+                    #r6 = np.repeat(dof_map, 6)
+                    #c6 = np.tile(np.arange(6), 12)
+                    rows_LR.append(r6)
+                    cols_LR.append(c6)
+                    data_L.append(Li.flatten())
+                    data_R.append(Ri.flatten())
 
-                    for a in range(12):
-                        for b in range(12):
-                            M_global[dof_map[a], dof_map[b]] += Mi[a, b]
-                            C_global[dof_map[a], dof_map[b]] += Ci[a, b]
-                            E_global[dof_map[a], dof_map[b]] += Ei[a, b]
-                        for b in range(6):
-                            L_global[dof_map[a], b] += Li[a, b]
-                            R_global[dof_map[a], b] += Ri[a, b]
+    rows_MCE = np.concatenate(rows_MCE)
+    cols_MCE = np.concatenate(cols_MCE)
+    M_global = coo_matrix((np.concatenate(data_M), (rows_MCE, cols_MCE)), shape=(n_dof, n_dof)).tocsc()
+    C_global = coo_matrix((np.concatenate(data_C), (rows_MCE, cols_MCE)), shape=(n_dof, n_dof)).tocsc()
+    E_global = coo_matrix((np.concatenate(data_E), (rows_MCE, cols_MCE)), shape=(n_dof, n_dof)).tocsc()
 
-    M = csc_matrix(M_global)
-    E = csc_matrix(E_global)
+    rows_LR = np.concatenate(rows_LR)
+    cols_LR = np.concatenate(cols_LR)
+    L_global = coo_matrix((np.concatenate(data_L), (rows_LR, cols_LR)), shape=(n_dof, 6)).toarray()
+    R_global = coo_matrix((np.concatenate(data_R), (rows_LR, cols_LR)), shape=(n_dof, 6)).toarray()
+
+    M = M_global
+    E = E_global
     H = csc_matrix(C_global - C_global.T)     # Eq. (8): H = C - C^T
-    C = csc_matrix(C_global)
+    C = C_global
 
     c10 = np.zeros(n_dof)  # translation along e3
     c20 = np.zeros(n_dof)  # rotation about e3
@@ -298,9 +343,6 @@ def evaluate_stiffness(material_D_matrices):
     c0_42, lam0_42 = solve_bordered(lu, -H @ c0_41 + M @ c40, n_dof)
 
     # Build A per Eq. (15)
-    #top = np.vstack([c10, c20])                       # (2, n)
-    MH  = np.hstack([M.toarray() if hasattr(M,'toarray') else M,
-                  -H.toarray() if hasattr(H,'toarray') else -H])  # (n, 2n) -- careful with shapes
 
     Mc10, Mc20 = M @ c10, M @ c20
     Hc11, Hc21 = H @ c11, H @ c21

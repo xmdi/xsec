@@ -1,8 +1,10 @@
 import gmsh
 import math
 import numpy as np
-from xsec.fe_core import evaluate_stiffness, constitutive_matrix_isotropic, evaluate_SC_TC
+from xsec.fe_core import evaluate_stiffness, constitutive_matrix_isotropic, evaluate_SC_TC, evaluate_decoupled_K
 import time
+
+#import cProfile, pstats
 
 def test_fe_core():
     """Evaluates a thin-walled semicircular steel tube against analytical values."""
@@ -75,6 +77,13 @@ def test_fe_core():
     D = constitutive_matrix_isotropic(E, v)
     D_list={mat_id:D}
  
+    #profiler = cProfile.Profile()
+    #K = profiler.runcall(evaluate_stiffness, D_list)
+    #profiler.dump_stats('profile_out')
+
+    #p = pstats.Stats('profile_out')
+    #p.sort_stats('cumulative').print_stats(15)
+
     K = evaluate_stiffness(D_list)
 
     stiffness_done = time.perf_counter()
@@ -99,10 +108,8 @@ def test_fe_core():
     x_sc = 0 # x shear center
     y_sc = 4 * R / math.pi # y shear center
 
-    Asy = A / 2 # effective shear area in y
-    Asx = (1 - 8/(math.pi**2)) * A  # effective shear area in x
-    Asx2 = A / 2  # effective shear area in x
-    Asy2 = .412 * R * thickness
+    Asx = A / 2  # effective shear area in x
+    Asy = (3 * (math.pi**2 -8)**2)/(2*math.pi*(5*math.pi**2 - 48)) * R * thickness
     xs_theory = [x_sc, y_sc] # shear center coordinates
     G = E / (2 * (1 + v))
     GJ = G * math.pi * R * thickness**3 / 3 
@@ -118,18 +125,21 @@ def test_fe_core():
     # translate computed stiffness about the part centroid
     Kc = T.T @ K @ T
 
-    print(f"Shear Stiffness in e1: {Kc[0,0]:.2e}, should be: {G*Asx2:.2e}, error: {(Kc[0,0]-G*Asx2)/(G*Asx2)*100:.2f}%")
-    print(f"Shear Stiffness in e2: {Kc[1,1]:.2e}, should be: {G*Asy2:.2e}, error: {(Kc[1,1]-G*Asy2)/(G*Asy2)*100:.2f}%")
+    K_prime = evaluate_decoupled_K(K)
+
+    print(f"Shear Stiffness in e1: {Kc[0,0]:.2e}, should be: {G*Asx:.2e}, error: {(Kc[0,0]-G*Asx)/(G*Asx)*100:.2f}%")
+    print(f"Shear Stiffness in e2: {Kc[1,1]:.2e}, should be: {G*Asy:.2e}, error: {(Kc[1,1]-G*Asy)/(G*Asy)*100:.2f}%")
     print(f"Axial Stiffness in e3: {Kc[2,2]:.2e}, should be: {E*A:.2e}, error: {(Kc[2,2]-E*A)/(E*A)*100:.2f}%")
     print(f"Bending Stiffness in e1: {Kc[3,3]:.2e}, should be: {E*Ixx:.2e}, error: {(Kc[3,3]-E*Ixx)/(E*Ixx)*100:.2f}%")
     print(f"Bending Stiffness in e2: {Kc[4,4]:.2e}, should be: {E*Iyy:.2e}, error: {(Kc[4,4]-E*Iyy)/(E*Iyy)*100:.2f}%")
-    print(f"Torsional Stiffness in e3: {Kc[5,5]:.2e}, should be: {GJ:.2e}, error: {(Kc[5,5]-GJ)/GJ*100:.2f}%")
+    print(f"Torsional Stiffness in e3: {K_prime[5,5]:.2e}, should be: {GJ:.2e}, error: {(K_prime[5,5]-GJ)/GJ*100:.2f}%")
 
     xs, xt = evaluate_SC_TC(K)
     print(f"Shear Center: {xs}, should be: {xs_theory}")
     print(f"Tension Center: {xt}, should be: {xt_theory}")
 
     print(K)
+    print(K_prime)
  
 
 
