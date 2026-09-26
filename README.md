@@ -1,6 +1,6 @@
 # xsec
 
-## under construction
+## still under construction
 
 slender beam cross-sectional analysis
 
