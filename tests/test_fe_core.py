@@ -126,21 +126,26 @@ def test_fe_core():
     Kc = T.T @ K @ T
 
     K_prime = evaluate_decoupled_K(K)
-
+    
+    """
     print(f"Shear Stiffness in e1: {Kc[0,0]:.2e}, should be: {G*Asx:.2e}, error: {(Kc[0,0]-G*Asx)/(G*Asx)*100:.2f}%")
     print(f"Shear Stiffness in e2: {Kc[1,1]:.2e}, should be: {G*Asy:.2e}, error: {(Kc[1,1]-G*Asy)/(G*Asy)*100:.2f}%")
     print(f"Axial Stiffness in e3: {Kc[2,2]:.2e}, should be: {E*A:.2e}, error: {(Kc[2,2]-E*A)/(E*A)*100:.2f}%")
     print(f"Bending Stiffness in e1: {Kc[3,3]:.2e}, should be: {E*Ixx:.2e}, error: {(Kc[3,3]-E*Ixx)/(E*Ixx)*100:.2f}%")
     print(f"Bending Stiffness in e2: {Kc[4,4]:.2e}, should be: {E*Iyy:.2e}, error: {(Kc[4,4]-E*Iyy)/(E*Iyy)*100:.2f}%")
     print(f"Torsional Stiffness in e3: {K_prime[5,5]:.2e}, should be: {GJ:.2e}, error: {(K_prime[5,5]-GJ)/GJ*100:.2f}%")
-
+    """
+    
     xs, xt = evaluate_SC_TC(K)
-    print(f"Shear Center: {xs}, should be: {xs_theory}")
-    print(f"Tension Center: {xt}, should be: {xt_theory}")
 
-    print(K)
-    print(K_prime)
- 
+    """print(f"Shear Center: {xs}, should be: {xs_theory}")
+    print(f"Tension Center: {xt}, should be: {xt_theory}")
+    """
+    # print(K)
+    # print(K_prime)
+
+    np.testing.assert_allclose([xs,xt], [xs_theory,xt_theory], atol=1e-2)
+    np.testing.assert_allclose([Kc[0,0],Kc[1,1],Kc[2,2],Kc[3,3],Kc[4,4],K_prime[5,5]], [G*Asx, G*Asy, E*A, E*Ixx, E*Iyy, GJ], rtol=2e-3)
 
 
 if __name__ == "__main__":
