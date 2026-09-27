@@ -212,6 +212,7 @@ def evaluate_stiffness(material_D_matrices):
     node_coords = node_coords_flat.reshape(-1, 3)[:, :2]
     n_dof = 3 * len(node_tags)
     n_nodes = len(node_tags)
+    mesh_elements = []
 
     # accumulate triples assemble M,C,E matrices directly
     rows_MCE, cols_MCE = [], []
@@ -260,6 +261,7 @@ def evaluate_stiffness(material_D_matrices):
                 for et, local_node_tags in zip(etags, enodes):
                     # et = element ID
                     # local_node_tags = node IDs for this element
+                    mesh_elements.append((etype, name, local_node_tags))   # save for later
                     local_idx = tag_to_idx[local_node_tags]        # vectorized lookup maps global gmsh node tag to global node row index (0 to num_nodes-1)
                     dof_map = np.repeat(local_idx * 3, 3) + np.tile(np.arange(3), 4)   # vectorized dof_map
 
@@ -397,5 +399,69 @@ def evaluate_stiffness(material_D_matrices):
 
     # compute sectional stiffness matrix using Lin 2025 eq 30
     K = G.T @ lhs @ G   # (6,6), reusing lhs = Qd.T @ Block @ Qd from above
-  
-    return K
+ 
+    c41_nodal = c41.reshape(-1,3)
+    errs = []
+    for i in range(len(node_coords)):
+        x1, x2 = node_coords[i]
+        if x1 <= 0: continue
+        j = np.where((np.abs(node_coords[:,0]+x1)<1e-6) & (np.abs(node_coords[:,1]-x2)<1e-6))[0][0]
+        errs.append(c41_nodal[i,2] + c41_nodal[j,2])  # expect ~0 for antisymmetric u3
+    print("c41 antisymmetry error (relative):", np.abs(errs).max() / np.abs(c41_nodal[:,2]).max())
+
+    c40_nodal = c40.reshape(-1,3)
+    print("c40 u2 values, left vs right sample:", c40_nodal[0,1], c40_nodal[-1,1])  # should be identical (both 1.0)
+
+    return K, G, Qd, mesh_elements, tag_to_idx, node_coords, n_dof
+
+def evaluate_strain_stress(theta, K, G, Qd, node_coords, mesh_elements, material_D_matrices, tag_to_idx, n_dof):
+    """mesh_elements: list of (etype, D_name, local_node_tags) per element
+    Returns: list of (local node_tags, node_coords, u_elem, u3_elem, gauss_pt_strains (4,6), gauss_pt_stresses (4,6))"""
+    S = np.array([
+        [0.0,0.0,0.0],[0.0,0.0,0.0],[0.0,0.0,0.0],
+        [1.0,0.0,0.0],[0.0,1.0,0.0],[0.0,0.0,1.0]])
+
+    psi = np.linalg.solve(K, theta)
+    kd = G @ psi
+    u_full = Qd @ kd
+    u3_global = u_full[:n_dof]
+    u_global  = u_full[n_dof:]
+
+    gp0 = 1.0/np.sqrt(3.0)
+    gps = np.array([[-gp0,-gp0],[gp0,-gp0],[gp0,gp0],[-gp0,gp0]])
+
+    results = []
+    for etype, mat_name, local_node_tags in mesh_elements:
+        D = material_D_matrices[mat_name]
+        local_idx = tag_to_idx[local_node_tags]
+        dof_map = np.repeat(local_idx*3, 3) + np.tile(np.arange(3), 4)   # 12 global DOF ids
+
+        u_elem  = u_global[dof_map]     # (12,) local nodal displacement
+        u3_elem = u3_global[dof_map]    # (12,) local nodal u,3
+
+        elem_coords = node_coords[local_idx]
+
+        strains, stresses = [], []
+        for gp in gps:
+            N, dN, det_J = evaluate_gauss_point(etype, elem_coords, gp)
+            eps = S @ N @ u3_elem + dN @ u_elem   # Lin 2025 eq 1 evaluated at this Gauss point
+            sig = D @ eps
+            strains.append(eps)
+            stresses.append(sig)
+
+        # reshape u_elem/u3_elem from (12,) flat -> (4,3) per-node [u1,u2,u3] for easy plotting
+        u_elem_nodal  = u_elem.reshape(4, 3)
+        u3_elem_nodal = u3_elem.reshape(4, 3)
+
+        results.append((
+            local_node_tags,
+            elem_coords,
+            u_elem_nodal,
+            u3_elem_nodal,
+            np.array(strains),
+            np.array(stresses)))
+
+    print("theta:", theta)
+    print("psi:", psi)
+    print("kd:", kd)
+    return results, u_global, u3_global

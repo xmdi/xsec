@@ -5,8 +5,6 @@ from pathlib import Path
 
 def test_pyvista():
 
-    msh = meshio.read("semicircle.msh")
-
     cells = msh.cells_dict["quad"]
     points = msh.points
 
@@ -54,8 +52,5 @@ def test_pyvista():
     plotter.enable_parallel_projection()
     plotter.view_xy()
     plotter.show()
-
-    file_path = Path("semicircle.msh")
-    file_path.unlink(missing_ok = True)
 
     np.testing.assert_allclose([1], [1], rtol=1e-5)
