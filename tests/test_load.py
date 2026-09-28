@@ -11,22 +11,21 @@ def test_load():
     mesh_start = time.perf_counter()
 
     gmsh.initialize()
-    gmsh.model.add("semicircle")
+    gmsh.model.add("square")
     gmsh.option.setNumber("General.Terminal", 1)
 
     R = 1
-    thickness = 0.1
-    circumferential_elements = 100
-    thickness_elements = 5
+    thickness = 1
+    circumferential_elements = 50
+    thickness_elements = 50
 
-    left_IML_pt = gmsh.model.occ.addPoint(-R + thickness / 2, 0, 0)
-    left_OML_pt = gmsh.model.occ.addPoint(-R - thickness / 2, 0, 0)
-    right_IML_pt = gmsh.model.occ.addPoint(R - thickness / 2, 0, 0)
-    right_OML_pt = gmsh.model.occ.addPoint(R + thickness / 2, 0, 0)
-    center_pt = gmsh.model.occ.addPoint(0, 0, 0)
+    left_IML_pt = gmsh.model.occ.addPoint(-R, -thickness, 0)
+    left_OML_pt = gmsh.model.occ.addPoint(-R, thickness, 0)
+    right_IML_pt = gmsh.model.occ.addPoint(R, -thickness, 0, 0)
+    right_OML_pt = gmsh.model.occ.addPoint(R, thickness, 0, 0)
 
-    IML = gmsh.model.occ.addCircleArc(left_IML_pt, center_pt, right_IML_pt)
-    OML = gmsh.model.occ.addCircleArc(left_OML_pt, center_pt, right_OML_pt)
+    IML = gmsh.model.occ.addLine(left_IML_pt, right_IML_pt) 
+    OML = gmsh.model.occ.addLine(left_OML_pt, right_OML_pt) 
     left_edge = gmsh.model.occ.addLine(left_IML_pt, left_OML_pt) 
     right_edge = gmsh.model.occ.addLine(right_IML_pt, right_OML_pt) 
 
@@ -80,7 +79,9 @@ def test_load():
 
     stiffness_done = time.perf_counter()
 
-    theta = np.array([0, 0, 0, 1000000, 0, 0])
+    #theta = np.array([0, 0, 1000000000, 0, 0, 0])
+    theta = np.array([0, 0, 0, 100000000, 0, 0])
+    theta = np.array([0, 0, 0, 0, 0, 100000000])
     results, u_global, u3_global = evaluate_strain_stress(theta, K, G, Qd, node_coords, mesh_elements, D_list, tag_to_idx, n_dof)
 
     scale = 1000

@@ -412,6 +412,18 @@ def evaluate_stiffness(material_D_matrices):
     c40_nodal = c40.reshape(-1,3)
     print("c40 u2 values, left vs right sample:", c40_nodal[0,1], c40_nodal[-1,1])  # should be identical (both 1.0)
 
+
+    Hc40 = H @ c40
+    Hc40_nodal = Hc40.reshape(-1,3)
+    errs = []
+    for i in range(len(node_coords)):
+        x1, x2 = node_coords[i]
+        if x1 <= 0: continue
+        j = np.where((np.abs(node_coords[:,0]+x1)<1e-6) & (np.abs(node_coords[:,1]-x2)<1e-6))[0][0]
+        errs.append(Hc40_nodal[i] + Hc40_nodal[j])   # per-component
+    errs = np.array(errs)
+    print("H@c40 antisymmetry error (relative):", np.abs(errs).max() / np.abs(Hc40_nodal).max())
+
     return K, G, Qd, mesh_elements, tag_to_idx, node_coords, n_dof
 
 def evaluate_strain_stress(theta, K, G, Qd, node_coords, mesh_elements, material_D_matrices, tag_to_idx, n_dof):
